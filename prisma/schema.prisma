@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -16,20 +15,22 @@ enum Role {
   USER
   ADMIN
   DISPATCHER
+  DISTRICT_ADMIN
+  MAIN_ADMIN
 }
 
 enum AmbulanceStatus {
   AVAILABLE
-  EN_ROUTE_TO_PATIENT
-  AT_SCENE
-  EN_ROUTE_TO_HOSPITAL
-  AT_HOSPITAL
-  OUT_OF_SERVICE
-  MAINTENANCE
+  EN_ROUTE
+  ON_MISSION
+  RESERVED_FOR_EVENT
+  SOFT_BLOCKED
+  HARD_BLOCKED
 }
 
 enum RequestStatus {
   PENDING
+  QUEUED
   ASSIGNED
   EN_ROUTE
   ON_SCENE
@@ -38,11 +39,36 @@ enum RequestStatus {
   CANCELLED
 }
 
+enum AssignmentStatus {
+  PENDING_ACCEPTANCE
+  ACCEPTED
+  REJECTED
+  FAILED_MID_ROUTE
+  COMPLETED
+}
+
+enum EventStatus {
+  CREATED
+  ACTIVE
+  ESCALATED
+  CONTAINED
+  COMPLETED
+  ARCHIVED
+}
+
 enum SeverityLevel {
-  LOW        // Non-life-threatening, stable
-  MEDIUM     // Urgent but not immediately life-threatening
-  HIGH       // Life-threatening emergency
-  CRITICAL   // Immediate resuscitation needed
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+  NATIONAL_EMERGENCY
+}
+
+enum GlobalHealthState {
+  NORMAL
+  STRESSED
+  CRITICAL
+  OVERLOAD
 }
 
 enum PaymentStatus {
@@ -54,17 +80,36 @@ enum PaymentStatus {
 }
 
 // ==========================================
-// Models
+// System Infrastructure Models
+// ==========================================
+
+model SystemState {
+  id              String             @id @default(auto()) @map("_id") @db.ObjectId
+  healthState     GlobalHealthState  @default(NORMAL)
+  lastEvaluatedAt DateTime           @default(now())
+}
+
+model SystemAuditLog {
+  id              String             @id @default(auto()) @map("_id") @db.ObjectId
+  actionType      String
+  details         String?
+  actorId         String?            @db.ObjectId
+  timestamp       DateTime           @default(now())
+}
+
+// ==========================================
+// Core Models
 // ==========================================
 
 model User {
   id             String             @id @default(auto()) @map("_id") @db.ObjectId
-  email          String             @unique
-  name           String
+  email          String?            @unique
+  name           String?
   phoneNumber    String             @unique
   passwordHash   String?
   role           Role               @default(USER)
   address        String?
+  trustScore     Int                @default(100)
   
   // Relations
   requests       EmergencyRequest[] @relation("UserRequests")
@@ -82,6 +127,7 @@ model Driver {
   phoneNumber    String             @unique
   licenseNumber  String             @unique
   isAvailable    Boolean            @default(true)
+  trustScore     Int                @default(100)
   
   // Relations
   ambulanceId    String?            @db.ObjectId @unique
@@ -95,7 +141,7 @@ model Driver {
 model Ambulance {
   id               String             @id @default(auto()) @map("_id") @db.ObjectId
   vehicleNumber    String             @unique
-  type             String             // e.g., Basic Life Support (BLS), Advanced Life Support (ALS)
+  type             String             // e.g., BLS, ALS
   status           AmbulanceStatus    @default(AVAILABLE)
   
   latitude         Float?
@@ -105,16 +151,33 @@ model Ambulance {
   // Relations
   driver           Driver?
   dispatchLogs     DispatchLog[]
-  currentRequest   EmergencyRequest?  @relation(fields: [currentRequestId], references: [id])
-  currentRequestId String?            @db.ObjectId @unique
+  dispatchAssignments DispatchAssignment[]
+  eventAssignments EventAssignment[]
 
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 }
 
+model Hospital {
+  id               String             @id @default(auto()) @map("_id") @db.ObjectId
+  name             String
+  specialty        String
+  latitude         Float
+  longitude        Float
+  capacity         Int
+  availableBeds    Int
+  
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+}
+
+// ==========================================
+// Operational Models
+// ==========================================
+
 model EmergencyRequest {
   id               String             @id @default(auto()) @map("_id") @db.ObjectId
-  patientName      String
+  patientName      String?
   patientPhone     String?
   pickupLocation   String
   pickupLat        Float
@@ -126,12 +189,15 @@ model EmergencyRequest {
   status           RequestStatus      @default(PENDING)
   severity         SeverityLevel      @default(MEDIUM)
   symptoms         String?
+
+  responseDeadline DateTime?
+  escalationCount  Int                @default(0)
   
   // Relations
   userId           String?            @db.ObjectId
   user             User?              @relation("UserRequests", fields: [userId], references: [id])
   
-  assignedAmbulance Ambulance?
+  dispatchAssignments DispatchAssignment[]
   dispatchLogs     DispatchLog[]
   payment          Payment?
   incidentReport   IncidentReport?
@@ -139,6 +205,59 @@ model EmergencyRequest {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 }
+
+model DispatchAssignment {
+  id               String             @id @default(auto()) @map("_id") @db.ObjectId
+  status           AssignmentStatus   @default(PENDING_ACCEPTANCE)
+  rejectionReason  String?
+  assignedAt       DateTime           @default(now())
+  expiresAt        DateTime
+
+  // Relations
+  requestId        String             @db.ObjectId
+  request          EmergencyRequest   @relation(fields: [requestId], references: [id])
+  
+  ambulanceId      String             @db.ObjectId
+  ambulance        Ambulance          @relation(fields: [ambulanceId], references: [id])
+}
+
+// ==========================================
+// Event Layer Models
+// ==========================================
+
+model Event {
+  id                   String             @id @default(auto()) @map("_id") @db.ObjectId
+  title                String
+  description          String?
+  type                 String
+  location             String
+  severity             SeverityLevel
+  status               EventStatus        @default(CREATED)
+  estimatedVictims     Int                @default(0)
+  maxAmbulanceCapacity Int
+  
+  // Relations
+  eventAssignments     EventAssignment[]
+  
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model EventAssignment {
+  id               String             @id @default(auto()) @map("_id") @db.ObjectId
+  assignedAt       DateTime           @default(now())
+  
+  // Relations
+  eventId          String             @db.ObjectId
+  event            Event              @relation(fields: [eventId], references: [id])
+  
+  ambulanceId      String             @db.ObjectId
+  ambulance        Ambulance          @relation(fields: [ambulanceId], references: [id])
+}
+
+// ==========================================
+// Historical & Logging Models
+// ==========================================
 
 model DispatchLog {
   id                 String           @id @default(auto()) @map("_id") @db.ObjectId
@@ -167,6 +286,7 @@ model Payment {
   method             String
   status             PaymentStatus    @default(PENDING)
   transactionId      String?          @unique
+  dueDate            DateTime?
   
   // Relations
   requestId          String           @db.ObjectId @unique

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { triggerDispatch } from "@/services/dispatchService";
 import { SeverityLevel } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
@@ -36,9 +35,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Log request creation details
-    console.log(`[EMERGENCY REQUEST] Incoming phone: ${phone}, Location: (${latFloat}, ${lngFloat}), Severity: ${severity}`);
+    console.log(`[API] Incoming phone: ${phone}, Location: (${latFloat}, ${lngFloat}), Severity: ${severity}`);
 
-    // Create EmergencyRequest in database
+    // Create EmergencyRequest in database. 
+    // The status defaults to PENDING. 
+    // The persistent worker.ts will pick this up automatically.
     const emergencyRequest = await prisma.emergencyRequest.create({
       data: {
         patientName: patientName || "Emergency Patient",
@@ -51,14 +52,16 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    console.log(`[EMERGENCY REQUEST] Created ID: ${emergencyRequest.id} in ${Date.now() - startTime}ms`);
+    console.log(`[API] Created ID: ${emergencyRequest.id} in ${Date.now() - startTime}ms. Queued for worker.`);
 
-    // Trigger auto-dispatch logic
-    await triggerDispatch(emergencyRequest.id);
+    // Emit live socket event for administrators to see it arrive
+    const { emitEmergencyCreated } = await import("@/socket/server");
+    emitEmergencyCreated(emergencyRequest);
 
     return NextResponse.json({
       success: true,
-      requestId: emergencyRequest.id
+      requestId: emergencyRequest.id,
+      message: "Request queued for dispatch worker"
     }, { status: 201 });
     
   } catch (error) {
