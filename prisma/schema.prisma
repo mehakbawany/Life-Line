@@ -1,0 +1,197 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// Enums
+// ==========================================
+
+enum Role {
+  USER
+  ADMIN
+  DISPATCHER
+}
+
+enum AmbulanceStatus {
+  AVAILABLE
+  EN_ROUTE_TO_PATIENT
+  AT_SCENE
+  EN_ROUTE_TO_HOSPITAL
+  AT_HOSPITAL
+  OUT_OF_SERVICE
+  MAINTENANCE
+}
+
+enum RequestStatus {
+  PENDING
+  ASSIGNED
+  EN_ROUTE
+  ON_SCENE
+  TRANSPORTING
+  COMPLETED
+  CANCELLED
+}
+
+enum SeverityLevel {
+  LOW        // Non-life-threatening, stable
+  MEDIUM     // Urgent but not immediately life-threatening
+  HIGH       // Life-threatening emergency
+  CRITICAL   // Immediate resuscitation needed
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// ==========================================
+// Models
+// ==========================================
+
+model User {
+  id             String             @id @default(auto()) @map("_id") @db.ObjectId
+  email          String             @unique
+  name           String
+  phoneNumber    String             @unique
+  passwordHash   String?
+  role           Role               @default(USER)
+  address        String?
+  
+  // Relations
+  requests       EmergencyRequest[] @relation("UserRequests")
+  payments       Payment[]          @relation("UserPayments")
+  incidentReports IncidentReport[]  @relation("ReportedIncidents")
+
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+}
+
+model Driver {
+  id             String             @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String?            @db.ObjectId @unique
+  name           String
+  phoneNumber    String             @unique
+  licenseNumber  String             @unique
+  isAvailable    Boolean            @default(true)
+  
+  // Relations
+  ambulanceId    String?            @db.ObjectId @unique
+  ambulance      Ambulance?         @relation(fields: [ambulanceId], references: [id])
+  dispatchLogs   DispatchLog[]
+
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+}
+
+model Ambulance {
+  id               String             @id @default(auto()) @map("_id") @db.ObjectId
+  vehicleNumber    String             @unique
+  type             String             // e.g., Basic Life Support (BLS), Advanced Life Support (ALS)
+  status           AmbulanceStatus    @default(AVAILABLE)
+  
+  latitude         Float?
+  longitude        Float?
+  lastLocationUpdate DateTime?
+
+  // Relations
+  driver           Driver?
+  dispatchLogs     DispatchLog[]
+  currentRequest   EmergencyRequest?  @relation(fields: [currentRequestId], references: [id])
+  currentRequestId String?            @db.ObjectId @unique
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+}
+
+model EmergencyRequest {
+  id               String             @id @default(auto()) @map("_id") @db.ObjectId
+  patientName      String
+  patientPhone     String?
+  pickupLocation   String
+  pickupLat        Float
+  pickupLng        Float
+  dropoffLocation  String?
+  dropoffLat       Float?
+  dropoffLng       Float?
+  
+  status           RequestStatus      @default(PENDING)
+  severity         SeverityLevel      @default(MEDIUM)
+  symptoms         String?
+  
+  // Relations
+  userId           String?            @db.ObjectId
+  user             User?              @relation("UserRequests", fields: [userId], references: [id])
+  
+  assignedAmbulance Ambulance?
+  dispatchLogs     DispatchLog[]
+  payment          Payment?
+  incidentReport   IncidentReport?
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+}
+
+model DispatchLog {
+  id                 String           @id @default(auto()) @map("_id") @db.ObjectId
+  action             String
+  notes              String?
+  timestamp          DateTime         @default(now())
+  
+  latitude           Float?
+  longitude          Float?
+
+  // Relations
+  requestId          String           @db.ObjectId
+  request            EmergencyRequest @relation(fields: [requestId], references: [id])
+  
+  ambulanceId        String?          @db.ObjectId
+  ambulance          Ambulance?       @relation(fields: [ambulanceId], references: [id])
+
+  driverId           String?          @db.ObjectId
+  driver             Driver?          @relation(fields: [driverId], references: [id])
+}
+
+model Payment {
+  id                 String           @id @default(auto()) @map("_id") @db.ObjectId
+  amount             Float
+  currency           String           @default("USD")
+  method             String
+  status             PaymentStatus    @default(PENDING)
+  transactionId      String?          @unique
+  
+  // Relations
+  requestId          String           @db.ObjectId @unique
+  request            EmergencyRequest @relation(fields: [requestId], references: [id])
+
+  userId             String?          @db.ObjectId
+  user               User?            @relation("UserPayments", fields: [userId], references: [id])
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model IncidentReport {
+  id                 String           @id @default(auto()) @map("_id") @db.ObjectId
+  description        String
+  medicationsGiven   String[]         @default([])
+  patientCondition   String?
+  
+  // Relations
+  requestId          String           @db.ObjectId @unique
+  request            EmergencyRequest @relation(fields: [requestId], references: [id])
+  
+  reportedById       String           @db.ObjectId
+  reportedBy         User             @relation("ReportedIncidents", fields: [reportedById], references: [id])
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
